@@ -260,6 +260,92 @@ public final class TorrentStream {
         return byteBuffer.toByteArray();
     }
 
+    public void startStream2(final String torrentUrl) {
+        if (!initialising && !initialised)
+            initialise();
+
+        if (libTorrentHandler == null || isStreaming) return;
+
+        isCanceled = false;
+
+        streamingThread = new HandlerThread(STREAMING_THREAD_NAME);
+        streamingThread.start();
+        streamingHandler = new Handler(streamingThread.getLooper());
+
+        streamingHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                isStreaming = true;
+
+                if (initialisingLatch != null) {
+                    try {
+                        initialisingLatch.await();
+                        initialisingLatch = null;
+                    } catch (InterruptedException e) {
+                        isStreaming = false;
+                        return;
+                    }
+                }
+
+                currentTorrentUrl = torrentUrl;
+
+                File saveDirectory = new File(torrentOptions.saveLocation);
+                if (!saveDirectory.isDirectory() && !saveDirectory.mkdirs()) {
+                    for (final TorrentListener listener : listeners) {
+                        ThreadUtils.runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                listener.onStreamError(null, new DirectoryModifyException());
+                            }
+                        });
+                    }
+                    isStreaming = false;
+                    return;
+                }
+
+//                torrentSession.removeListener(torrentAddedAlertListener);
+                TorrentInfo torrentInfo = null;
+                try {
+                    torrentInfo = getTorrentInfo(torrentUrl);
+                } catch (final TorrentInfoException e) {
+                    for (final TorrentListener listener : listeners) {
+                        ThreadUtils.runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                listener.onStreamError(null, e);
+                            }
+                        });
+                    }
+                }
+//                torrentSession.addListener(torrentAddedAlertListener);
+
+                if (torrentInfo == null) {
+                    for (final TorrentListener listener : listeners) {
+                        ThreadUtils.runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                listener.onStreamError(null, new TorrentInfoException(null));
+                            }
+                        });
+                    }
+                    isStreaming = false;
+                    return;
+                }
+
+                Priority[] priorities = new Priority[torrentInfo.numFiles()];
+                for (int i = 0; i < priorities.length; i++) {
+                    priorities[i] = Priority.IGNORE;
+                }
+
+                if (!currentTorrentUrl.equals(torrentUrl) || isCanceled) {
+                    return;
+                }
+
+                torrentSession.download(torrentInfo, saveDirectory, null, priorities, null);
+            }
+        });
+    }
+
     /**
      * Start stream download for specified torrent
      *
